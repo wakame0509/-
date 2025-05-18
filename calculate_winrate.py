@@ -1,5 +1,5 @@
 import eval7
-from itertools import combinations
+import random
 
 def evaluate_hand(cards):
     return eval7.evaluate(cards)
@@ -12,73 +12,78 @@ def generate_deck():
 def remove_known_cards(deck, known_cards):
     return [card for card in deck if card not in known_cards]
 
-def generate_possible_hands(deck, n=2):
-    return list(combinations(deck, n))
-
-def convert_str_to_eval7(cards):
-    return [eval7.Card(c) for c in cards]
-
-def run_winrate_evolution(hero_hand, board, opp_range, num_trials=10000, exclude_4players=False):
-    wins = 0
-    ties = 0
-    total = 0
-
-    hero_eval = convert_str_to_eval7(hero_hand)
-    board_eval = convert_str_to_eval7(board)
-    known = set(hero_hand + board)
-
+def run_winrate_evolution(p1_card1, p1_card2, board, selected_range,
+                          extra_excluded=None, num_simulations=10000):
+    """
+    フロップ、ターン、リバーでの勝率と変動を精密に算出する
+    """
+    known = [p1_card1, p1_card2] + board
     full_deck = generate_deck()
     deck = remove_known_cards(full_deck, known)
 
-    if exclude_4players:
-        # 4人分（8枚）を除外
-        all_exclusions = list(combinations(deck, 8))
-        deck = deck.copy()  # copy is safer
-        for excl_cards in all_exclusions[:1]:  # 簡易的に最初の1通り
-            excluded = set(excl_cards)
-            sim_deck = [c for c in deck if c not in excluded]
-            result = _simulate_trials(hero_eval, board_eval, sim_deck, opp_range, num_trials)
-            wins += result[0]
-            ties += result[1]
-            total += result[2]
-    else:
-        result = _simulate_trials(hero_eval, board_eval, deck, opp_range, num_trials)
-        wins += result[0]
-        ties += result[1]
-        total += result[2]
+    if extra_excluded:
+        deck = remove_known_cards(deck, extra_excluded)
 
-    return (wins + ties / 2) / total * 100 if total > 0 else 0.0
+    flop_wins = turn_wins = river_wins = 0
+    flop_ties = turn_ties = river_ties = 0
 
-def _simulate_trials(hero_eval, board_eval, deck, opp_range, num_trials):
-    import random
-    wins = 0
-    ties = 0
-    total = 0
-
-    for _ in range(num_trials):
+    for _ in range(num_simulations):
         sim_deck = deck.copy()
         random.shuffle(sim_deck)
 
-        if opp_range:
-            opp_hand = random.choice(opp_range)
+        if selected_range:
+            opp_hand = random.choice(selected_range)
         else:
             opp_hand = [sim_deck.pop(), sim_deck.pop()]
 
-        opp_eval = convert_str_to_eval7(opp_hand)
-        missing = 5 - len(board_eval)
-        rem_board = convert_str_to_eval7([sim_deck.pop() for _ in range(missing)])
-        full_board = board_eval + rem_board
+        # フロップ評価
+        flop_board = board + [sim_deck.pop() for _ in range(5 - len(board))]
+        p1_flop = [eval7.Card(p1_card1), eval7.Card(p1_card2)] + [eval7.Card(c) for c in flop_board]
+        p2_flop = [eval7.Card(opp_hand[0]), eval7.Card(opp_hand[1])] + [eval7.Card(c) for c in flop_board]
+        s1_flop = evaluate_hand(p1_flop)
+        s2_flop = evaluate_hand(p2_flop)
 
-        p1 = hero_eval + full_board
-        p2 = opp_eval + full_board
+        if s1_flop > s2_flop:
+            flop_wins += 1
+        elif s1_flop == s2_flop:
+            flop_ties += 1
 
-        s1 = evaluate_hand(p1)
-        s2 = evaluate_hand(p2)
+        # ターン評価
+        turn_card = sim_deck.pop()
+        turn_board = flop_board[:4] + [turn_card]
+        p1_turn = [eval7.Card(p1_card1), eval7.Card(p1_card2)] + [eval7.Card(c) for c in turn_board]
+        p2_turn = [eval7.Card(opp_hand[0]), eval7.Card(opp_hand[1])] + [eval7.Card(c) for c in turn_board]
+        s1_turn = evaluate_hand(p1_turn)
+        s2_turn = evaluate_hand(p2_turn)
 
-        if s1 > s2:
-            wins += 1
-        elif s1 == s2:
-            ties += 1
-        total += 1
+        if s1_turn > s2_turn:
+            turn_wins += 1
+        elif s1_turn == s2_turn:
+            turn_ties += 1
 
-    return wins, ties, total
+        # リバー評価
+        river_card = sim_deck.pop()
+        river_board = turn_board[:5] + [river_card]
+        p1_river = [eval7.Card(p1_card1), eval7.Card(p1_card2)] + [eval7.Card(c) for c in river_board]
+        p2_river = [eval7.Card(opp_hand[0]), eval7.Card(opp_hand[1])] + [eval7.Card(c) for c in river_board]
+        s1_river = evaluate_hand(p1_river)
+        s2_river = evaluate_hand(p2_river)
+
+        if s1_river > s2_river:
+            river_wins += 1
+        elif s1_river == s2_river:
+            river_ties += 1
+
+    flop_winrate = (flop_wins + flop_ties / 2) / num_simulations * 100
+    turn_winrate = (turn_wins + turn_ties / 2) / num_simulations * 100
+    river_winrate = (river_wins + river_ties / 2) / num_simulations * 100
+
+    return {
+        "Preflop": 0.0,
+        "FlopWinrate": flop_winrate,
+        "TurnWinrate": turn_winrate,
+        "RiverWinrate": river_winrate,
+        "ShiftFlop": flop_winrate - 0.0,
+        "ShiftTurn": turn_winrate - flop_winrate,
+        "ShiftRiver": river_winrate - turn_winrate
+    }
